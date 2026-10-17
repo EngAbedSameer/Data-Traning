@@ -50,7 +50,7 @@ def generate_market_gap_insights(reviews_frame, api_key=None, model="gemini-2.5-
     key = api_key or os.environ.get("GEMINI_API_KEY", "")
     if not key:
         local = _local_insights(reviews_frame, output_language)
-        notice = "لم يتم إعداد Gemini. أضف GEMINI_API_KEY وثبّت google-genai لتفعيل الملخص بالذكاء الاصطناعي." if output_language.lower().startswith("ar") else "Gemini is not configured. Add GEMINI_API_KEY and install google-genai to enable AI summaries."
+        notice = "لم يتم إعداد Gemini. أضف GEMINI_API_KEY إلى أسرار Streamlit أو متغيرات البيئة لتفعيل الملخص بالذكاء الاصطناعي." if output_language.lower().startswith("ar") else "Gemini is not configured. Set GEMINI_API_KEY in Streamlit secrets or the environment to enable AI summaries."
         return local + "\n\n" + notice
     try:
         from google import genai
@@ -65,7 +65,17 @@ def generate_market_gap_insights(reviews_frame, api_key=None, model="gemini-2.5-
         return response.text or _local_insights(reviews_frame, output_language)
     except Exception as error:
         LOG.exception("Gemini analysis failed; using local analysis")
+        # Show the API's diagnostic message and status when available. The old
+        # message only displayed the exception class (e.g. ClientError), which
+        # was not enough to distinguish a bad key from quota/model issues.
+        error_detail = getattr(error, "message", None) or str(error)
+        error_code = getattr(error, "code", None)
+        if error_code:
+            error_detail = f"HTTP {error_code}: {error_detail}"
+        if key:
+            error_detail = error_detail.replace(key, "[hidden]")
+        error_detail = " ".join(str(error_detail).split())[:700]
         if output_language.lower().startswith("ar"):
-            return _local_insights(reviews_frame, output_language) + f"\n\nتعذّر طلب Gemini ({type(error).__name__})؛ يعرض التطبيق التحليل المحلي."
-        return _local_insights(reviews_frame, output_language) + f"\n\nGemini request failed ({type(error).__name__}); showing local analysis instead."
+            return _local_insights(reviews_frame, output_language) + f"\n\nتعذّر طلب Gemini ({type(error).__name__}: {error_detail})؛ يعرض التطبيق التحليل المحلي."
+        return _local_insights(reviews_frame, output_language) + f"\n\nGemini request failed ({type(error).__name__}: {error_detail}); showing local analysis instead."
 
