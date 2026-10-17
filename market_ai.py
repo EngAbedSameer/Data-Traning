@@ -40,7 +40,7 @@ def _local_insights(reviews_frame, output_language="English"):
                   "- Track each theme and competitor in the next research cycle to measure whether the gap persists."]
     return "\n".join(lines)
 
-def generate_market_gap_insights(reviews_frame, api_key=None, model="gemini-2.5-flash", output_language="English"):
+def generate_market_gap_insights(reviews_frame, api_key=None, model="gemini-3.8-flash", output_language="English"):
     """Use Gemini when configured, otherwise return reproducible local insights."""
     if reviews_frame.empty:
         return "اجمع تعليقات التطبيقات المنافسة قبل إنشاء ملخص فجوات السوق." if output_language.lower().startswith("ar") else "Collect competitor reviews before generating market-gap insights."
@@ -61,8 +61,8 @@ def generate_market_gap_insights(reviews_frame, api_key=None, model="gemini-2.5-
                   "Return an executive brief with recurring bugs/complaints, requested or missing features, "
                   "three strategic recommendations, and confidence/limitations. Do not invent competitor features.\n\n"
                   + str(evidence))
-        response = client.models.generate_content(model=model, contents=prompt)
-        return response.text or _local_insights(reviews_frame, output_language)
+        interaction = client.interactions.create(model=model, input=prompt, store=False)
+        return interaction.output_text or _local_insights(reviews_frame, output_language)
     except Exception as error:
         LOG.exception("Gemini analysis failed; using local analysis")
         # Show the API's diagnostic message and status when available. The old
