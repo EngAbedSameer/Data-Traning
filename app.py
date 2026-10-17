@@ -38,6 +38,16 @@ def _generate_market_gap_compat(reviews_frame, api_key, output_language):
             raise
         return generate_market_gap_insights(reviews_frame, api_key)
 
+
+def _configured_gemini_key():
+    """Read Gemini credentials from Streamlit secrets or the process environment."""
+    key = os.environ.get("GEMINI_API_KEY", "")
+    try:
+        key = st.secrets.get("GEMINI_API_KEY", key)
+    except Exception:
+        pass
+    return key
+
 UI_TEXT = {
     "en": {
         "interface_language": "Interface language", "interface_options": {"en": "English", "ar": "Arabic"},
@@ -49,6 +59,13 @@ UI_TEXT = {
         "searching": "Searching the Google Play Store...", "search_failed": "Search failed: {error}",
         "search_progress": "Search progress",
         "search_steps": {"validate": "Validate the search request", "search": "Search the selected Play Store", "prepare": "Prepare app results", "complete": "Search complete"},
+        "collection_progress": "Review collection and analysis progress",
+        "collection_steps": {"collect": "Collect reviews from selected apps", "prepare": "Combine and prepare review data", "save": "Save data to the database", "analyze": "Analyze reviews with Gemini / local fallback", "complete": "Collection and analysis complete"},
+        "collecting_app": "Collecting app {index} of {total}: {title}",
+        "preparing_reviews": "Preparing {count:,} collected reviews",
+        "saving_data": "Saving apps and reviews to the database",
+        "analyzing_reviews": "Generating the market-gap analysis",
+        "collection_failed": "Collection completed, but no reviews were returned.",
         "results": "Search results", "select_hint": "Choose 2 to 4 competitors, then start review collection.",
         "select_count": "Select between 2 and 4 apps to continue.", "collect": "Collect reviews and analyze",
         "scrape_failed": "Could not collect reviews for {title}: {error}", "no_reviews": "No reviews were collected. Check connectivity and try again.",
@@ -62,6 +79,8 @@ UI_TEXT = {
         "word_count": "Number of words", "no_words": "No frequent words to display for this selection.",
         "word_chart": "Most common words — {group} reviews", "mentions": "Mentions", "word": "Word",
         "no_insights": "Collect a new review sample to generate the market-gap brief.",
+        "refresh_insights": "Generate / refresh AI summary",
+        "generating_insights": "Generating the market-gap summary...",
         "export_description": "Download the competitor metadata, review-level records, and sentiment summary as an Excel workbook.",
         "prepare_report": "Prepare multi-sheet Excel report", "download_report": "Download Excel report",
         "excel_error": "Excel export requires openpyxl. Install it with: pip install openpyxl",
@@ -82,6 +101,13 @@ UI_TEXT = {
         "searching": "جارٍ البحث في Google Play...", "search_failed": "تعذّر البحث: {error}",
         "search_progress": "تقدّم البحث",
         "search_steps": {"validate": "التحقق من عبارة البحث", "search": "البحث في متجر Play للدولة المختارة", "prepare": "تجهيز نتائج التطبيقات", "complete": "اكتمل البحث"},
+        "collection_progress": "تقدّم جمع التعليقات وتحليلها",
+        "collection_steps": {"collect": "جمع التعليقات من التطبيقات المحددة", "prepare": "دمج التعليقات وتجهيز البيانات", "save": "حفظ البيانات في قاعدة البيانات", "analyze": "تحليل التعليقات عبر Gemini أو التحليل المحلي", "complete": "اكتمل الجمع والتحليل"},
+        "collecting_app": "جارٍ جمع تعليقات التطبيق {index} من {total}: {title}",
+        "preparing_reviews": "جارٍ تجهيز {count:,} تعليق تم جمعه",
+        "saving_data": "جارٍ حفظ التطبيقات والتعليقات في قاعدة البيانات",
+        "analyzing_reviews": "جارٍ إنشاء تحليل فجوات السوق",
+        "collection_failed": "اكتملت المحاولة، لكن لم يتم استرجاع أي تعليق.",
         "results": "نتائج البحث", "select_hint": "اختر من تطبيقين إلى أربعة تطبيقات، ثم ابدأ جمع التعليقات.",
         "select_count": "اختر من تطبيقين إلى أربعة تطبيقات للمتابعة.", "collect": "جمع التعليقات وتحليلها",
         "scrape_failed": "تعذّر جمع التعليقات لتطبيق {title}: {error}", "no_reviews": "لم يتم جمع أي تعليقات. تحقق من الاتصال ثم حاول مجدداً.",
@@ -95,6 +121,8 @@ UI_TEXT = {
         "word_count": "عدد الكلمات المعروضة", "no_words": "لا توجد كلمات متكررة لعرضها ضمن هذا الاختيار.",
         "word_chart": "الكلمات الأكثر شيوعاً — تعليقات {group}", "mentions": "عدد التكرارات", "word": "الكلمة",
         "no_insights": "اجمع عينة جديدة من التعليقات لإنشاء ملخص فجوات السوق.",
+        "refresh_insights": "إنشاء / تحديث ملخص الذكاء الاصطناعي",
+        "generating_insights": "جارٍ إنشاء ملخص فجوات السوق...",
         "export_description": "نزّل بيانات التطبيقات المنافسة والتعليقات وملخص المشاعر في ملف Excel متعدد الأوراق.",
         "prepare_report": "إعداد تقرير Excel متعدد الأوراق", "download_report": "تنزيل تقرير Excel",
         "excel_error": "يتطلب تصدير Excel مكتبة openpyxl. ثبّتها بالأمر: pip install openpyxl",
@@ -164,6 +192,68 @@ def _render_search_progress(placeholder, current_step, language, failed_step=Non
     </style>
     <div class="flow-box"><div class="flow-title">{UI_TEXT[language]['search_progress']}</div>
       {''.join(items)}
+    </div>
+    """
+    placeholder.markdown(html, unsafe_allow_html=True)
+
+
+def _render_collection_progress(placeholder, percent, current_step, language, detail="", failed=False):
+    """Render collection stages with a numeric circular progress indicator."""
+    steps = ["collect", "prepare", "save", "analyze", "complete"]
+    labels = UI_TEXT[language]["collection_steps"]
+    current_index = steps.index(current_step) if current_step in steps else 0
+    percent = max(0, min(100, int(percent)))
+    items = []
+    for index, step in enumerate(steps):
+        if failed and index == current_index:
+            state_class, marker = "failed", "!"
+        elif index < current_index or (current_step == "complete" and not failed):
+            state_class, marker = "done", "✓"
+        elif index == current_index:
+            state_class, marker = "active", str(index + 1)
+        else:
+            state_class, marker = "pending", str(index + 1)
+        items.append(
+            f'<div class="collect-step"><span class="collect-ring {state_class}"><span>{marker}</span></span>'
+            f'<span>{labels[step]}</span></div>'
+        )
+    direction = "rtl" if language == "ar" else "ltr"
+    align = "right" if language == "ar" else "left"
+    ring_color = "#d9534f" if failed else "#2878d0"
+    safe_detail = (str(detail).replace("&", "&amp;").replace("<", "&lt;")
+                   .replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#x27;"))
+    detail_html = f'<div class="collect-detail">{safe_detail}</div>' if detail else ""
+    html = f"""
+    <style>
+      @keyframes collect-spin {{ to {{ transform: rotate(360deg); }} }}
+      .collect-box {{ direction:{direction}; text-align:{align}; display:flex; align-items:center;
+        gap:22px; border:1px solid #d9dee7; border-radius:14px; padding:16px 20px; margin:8px 0 16px;
+        background:rgba(128,128,128,.04); }}
+      .collect-gauge {{ width:82px; height:82px; flex:0 0 82px; border-radius:50%; display:grid;
+        place-items:center; background:conic-gradient({ring_color} {percent}%, #e7ebf0 0); }}
+      .collect-gauge-inner {{ width:66px; height:66px; border-radius:50%; background:var(--background-color, #fff);
+        display:grid; place-items:center; font-size:18px; font-weight:750; }}
+      .collect-content {{ flex:1; min-width:0; }}
+      .collect-title {{ font-weight:700; margin-bottom:8px; }}
+      .collect-detail {{ font-size:13px; opacity:.8; margin-bottom:7px; overflow-wrap:anywhere; }}
+      .collect-step {{ display:flex; align-items:center; gap:9px; min-height:31px; font-size:13px; }}
+      .collect-ring {{ width:21px; height:21px; border-radius:50%; box-sizing:border-box; display:inline-flex;
+        align-items:center; justify-content:center; flex:0 0 21px; font-size:11px; font-weight:700; }}
+      .collect-ring span {{ width:16px; height:16px; border-radius:50%; display:flex; align-items:center;
+        justify-content:center; background:#fff; }}
+      .collect-ring.active {{ border:3px solid #d9e4f5; border-top-color:{ring_color}; color:{ring_color};
+        animation:collect-spin .9s linear infinite; }}
+      .collect-ring.active span {{ animation:collect-spin .9s linear infinite reverse; }}
+      .collect-ring.done {{ border:2px solid #279566; color:#18794e; }}
+      .collect-ring.failed {{ border:2px solid #d9534f; color:#b42318; }}
+      .collect-ring.pending {{ border:2px solid #aab2bf; color:#737b87; }}
+      @media (max-width:600px) {{ .collect-box {{ gap:12px; padding:12px; }}
+        .collect-gauge {{ width:68px; height:68px; flex-basis:68px; }}
+        .collect-gauge-inner {{ width:54px; height:54px; font-size:15px; }} }}
+    </style>
+    <div class="collect-box"><div class="collect-gauge"><div class="collect-gauge-inner">{percent}%</div></div>
+      <div class="collect-content"><div class="collect-title">{UI_TEXT[language]['collection_progress']}</div>
+        {detail_html}{''.join(items)}</div>
     </div>
     """
     placeholder.markdown(html, unsafe_allow_html=True)
@@ -273,10 +363,17 @@ if not results.empty:
         st.warning(t["select_count"])
     if st.button(t["collect"], type="primary", disabled=not 2 <= len(selected) <= 4):
         app_rows, review_frames = [], []
-        progress = st.progress(0)
+        collection_box = st.empty()
+        def update_collection_progress(percent, step, detail="", failed=False):
+            _render_collection_progress(collection_box, percent, step, ui, detail, failed)
+
+        update_collection_progress(0, "collect")
         for index, row in enumerate(selected):
             title = str(row.get("title", "Unknown app"))
             app_id = str(row.get("app_id", ""))
+            update_collection_progress(
+                5 + int(55 * index / len(selected)), "collect",
+                t["collecting_app"].format(index=index + 1, total=len(selected), title=title))
             store_rating = get_country_app_rating(
                 app_id, lang=search_language, country=country, fallback=row.get("rating"))
             app_rows.append({"app_id": str(row.get("app_id", "")), "title": title,
@@ -287,22 +384,22 @@ if not results.empty:
                     lang=review_language, country=country))
             except Exception as error:
                 st.warning(t["scrape_failed"].format(title=title, error=error))
-            progress.progress((index + 1) / len(selected))
+            update_collection_progress(5 + int(55 * (index + 1) / len(selected)), "collect")
+        update_collection_progress(65, "prepare")
         app_frame = pd.DataFrame(app_rows)
         reviews_frame = pd.concat(review_frames, ignore_index=True) if review_frames else pd.DataFrame()
         if reviews_frame.empty:
+            update_collection_progress(100, "collect", t["collection_failed"], failed=True)
             st.error(t["no_reviews"])
         else:
+            update_collection_progress(75, "save", t["saving_data"])
             save_competitor_data(app_frame, reviews_frame)
             st.session_state["current_apps"] = app_frame
             st.session_state["current_reviews"] = reviews_frame
-            gemini_key = os.environ.get("GEMINI_API_KEY", "")
-            try:
-                gemini_key = st.secrets.get("GEMINI_API_KEY", gemini_key)
-            except Exception:
-                pass
+            update_collection_progress(85, "analyze", t["analyzing_reviews"])
             st.session_state["current_insights"] = _generate_market_gap_compat(
-                reviews_frame, gemini_key, "Arabic" if ui == "ar" else "English")
+                reviews_frame, _configured_gemini_key(), "Arabic" if ui == "ar" else "English")
+            update_collection_progress(100, "complete")
             st.success(t["collected"].format(count=len(reviews_frame), path=DB_PATH))
 
 reviews_frame = st.session_state.get("current_reviews", pd.DataFrame())
@@ -368,8 +465,29 @@ if not reviews_frame.empty:
                 title=t["word_chart"].format(group=word_group_label.lower()), labels={"count": t["mentions"], "word": t["word"]}), use_container_width=True)
             st.dataframe(words.rename(columns={"word": t["word"], "count": t["mentions"]}), use_container_width=True, hide_index=True)
     with market_gap_tab:
+        if st.button(t["refresh_insights"], type="primary", key=f"refresh_insights_{ui}"):
+            with st.spinner(t["generating_insights"]):
+                st.session_state["current_insights"] = _generate_market_gap_compat(
+                    reviews_frame, _configured_gemini_key(), "Arabic" if ui == "ar" else "English")
+            insights = st.session_state["current_insights"]
         if insights:
-            st.markdown(insights)
+            text_direction = "rtl" if ui == "ar" else "ltr"
+            text_alignment = "right" if ui == "ar" else "left"
+            st.markdown(f"""
+            <style>
+              .st-key-market-gap-insight-output [data-testid="stMarkdownContainer"],
+              .st-key-market-gap-insight-output [data-testid="stMarkdownContainer"] * {{
+                direction:{text_direction} !important;
+                text-align:{text_alignment} !important;
+              }}
+              .st-key-market-gap-insight-output [data-testid="stMarkdownContainer"] p,
+              .st-key-market-gap-insight-output [data-testid="stMarkdownContainer"] li {{
+                unicode-bidi:plaintext;
+              }}
+            </style>
+            """, unsafe_allow_html=True)
+            with st.container(key="market-gap-insight-output"):
+                st.markdown(insights)
         else:
             st.info(t["no_insights"])
     with export_tab:
